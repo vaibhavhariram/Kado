@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -63,9 +64,19 @@ def _transcribe_local(wav_path: str) -> list[TranscriptSegment]:
     return segments
 
 
+def get_whispercpp_binary_path() -> str | None:
+    """Resolve whisper-cpp CLI path. Returns None if not found."""
+    path = os.environ.get("WHISPERCPP_PATH", "").strip()
+    if path:
+        return path
+    return shutil.which("whisper-cpp") or shutil.which("whisper-cli")
+
+
 def _transcribe_whispercpp(wav_path: str) -> list[TranscriptSegment]:
     """Transcribe using whisper-cpp CLI (no PyAV/faster-whisper deps)."""
-    cli_path = os.environ.get("WHISPERCPP_PATH", "whisper-cpp").strip()
+    cli_path = get_whispercpp_binary_path()
+    if not cli_path:
+        raise ValueError("whisper-cpp binary not found. Install with: brew install whisper-cpp")
     model_path = os.environ.get("WHISPERCPP_MODEL_PATH", "").strip()
     lang = os.environ.get("WHISPERCPP_LANG", "en").strip()
 

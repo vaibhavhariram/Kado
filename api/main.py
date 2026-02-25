@@ -74,12 +74,19 @@ def _require_provider_keys(mock: bool) -> None:
             detail="GEMINI_API_KEY is not configured. Set the env var when using EXTRACT_PROVIDER=gemini.",
         )
 
-    # whisper-cpp model path required when transcription uses whispercpp
-    if transcribe_provider == "whispercpp" and not os.getenv("WHISPERCPP_MODEL_PATH", "").strip():
-        raise HTTPException(
-            status_code=501,
-            detail="WHISPERCPP_MODEL_PATH is required when using TRANSCRIBE_PROVIDER=whispercpp.",
-        )
+    # whisper-cpp model path and binary required when transcription uses whispercpp
+    if transcribe_provider == "whispercpp":
+        if not os.getenv("WHISPERCPP_MODEL_PATH", "").strip():
+            raise HTTPException(
+                status_code=501,
+                detail="WHISPERCPP_MODEL_PATH is required when using TRANSCRIBE_PROVIDER=whispercpp.",
+            )
+        from stages.transcribe import get_whispercpp_binary_path
+        if not get_whispercpp_binary_path():
+            raise HTTPException(
+                status_code=501,
+                detail="whisper-cpp binary not found. Install with: brew install whisper-cpp",
+            )
 
 
 @asynccontextmanager

@@ -24,8 +24,21 @@ def _whispercpp_mode_no_model_path(monkeypatch):
     monkeypatch.delenv("MOCK_MODE", raising=False)
     monkeypatch.setenv("TRANSCRIBE_PROVIDER", "whispercpp")
     monkeypatch.delenv("WHISPERCPP_MODEL_PATH", raising=False)
+    monkeypatch.delenv("WHISPERCPP_PATH", raising=False)
     monkeypatch.setenv("EXTRACT_PROVIDER", "mock")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+
+@pytest.fixture
+def _whispercpp_mode_no_binary(monkeypatch, tmp_path):
+    """Set up whispercpp transcription with model path but no binary."""
+    fake_model = tmp_path / "fake-model.bin"
+    fake_model.write_bytes(b"x")
+    monkeypatch.delenv("MOCK_MODE", raising=False)
+    monkeypatch.setenv("TRANSCRIBE_PROVIDER", "whispercpp")
+    monkeypatch.setenv("WHISPERCPP_MODEL_PATH", str(fake_model))
+    monkeypatch.delenv("WHISPERCPP_PATH", raising=False)
+    monkeypatch.setenv("EXTRACT_PROVIDER", "mock")
 
 
 def _client():
@@ -51,6 +64,22 @@ class TestWhisperCppProvider:
         body = resp.json()
         assert "detail" in body
         assert "WHISPERCPP_MODEL_PATH" in body["detail"]
+
+    def test_missing_binary_returns_501(self, _whispercpp_mode_no_binary):
+        """POST /analyze should return 501 when whisper-cpp binary is not found."""
+        with patch("stages.transcribe.shutil.which", return_value=None):
+            client = _client()
+            dummy = b"fake video content"
+            resp = client.post(
+                "/analyze",
+                files={"file": ("test.mp4", dummy, "video/mp4")},
+            )
+
+        assert resp.status_code == 501, f"Expected 501, got {resp.status_code}: {resp.text}"
+        body = resp.json()
+        assert "detail" in body
+        assert "whisper-cpp" in body["detail"].lower()
+        assert "brew install" in body["detail"].lower()
 
     def test_whispercpp_does_not_import_faster_whisper(self, monkeypatch, tmp_path):
         """TRANSCRIBE_PROVIDER=whispercpp must not import faster_whisper (no ImportError when it's missing)."""
