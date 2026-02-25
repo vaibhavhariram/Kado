@@ -200,6 +200,57 @@ def _extract_ollama(window: list[TranscriptSegment]) -> list[FailureEvent]:
     return []
 
 
+def _extract_with_gemini(window: list[TranscriptSegment]) -> list[FailureEvent]:
+    """Extract failures using Google Gemini API.
+    
+    Uses same JSON parsing + retry strategy as OpenAI.
+    Requires GEMINI_API_KEY environment variable.
+    """
+    import google.generativeai as genai
+    
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY is not set")
+    
+    genai.configure(api_key=api_key)
+    
+    model_name = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
+    model = genai.GenerativeModel(model_name)
+    
+    user_content = _format_window(window)
+    
+    # Combine system + user into single prompt for Gemini
+    full_prompt = f"{SYSTEM_PROMPT}\n\nTranscript window:\n{user_content}"
+    
+    # First attempt
+    try:
+        response = model.generate_content(full_prompt)
+        first_reply = response.text if response.text else ""
+        
+        try:
+            return _parse_failures(first_reply)
+        except (json.JSONDecodeError, ValueError, KeyError):
+            pass
+    except Exception as e:
+        logger.warning("Gemini first attempt failed: %s", str(e))
+    
+    # Retry with repair prompt
+    repair_full_prompt = f"{full_prompt}\n\nYour previous response was not valid JSON. {REPAIR_PROMPT}"
+    
+    try:
+        response = model.generate_content(repair_full_prompt)
+        second_reply = response.text if response.text else ""
+        
+        try:
+            return _parse_failures(second_reply)
+        except (json.JSONDecodeError, ValueError, KeyError):
+            # Both attempts failed — skip this window
+            return []
+    except Exception as e:
+        logger.warning("Gemini retry failed: %s", str(e))
+        return []
+
+
 def extract_failures(window: list[TranscriptSegment]) -> list[FailureEvent]:
     """Extract failure events from a transcript window.
 
@@ -207,6 +258,7 @@ def extract_failures(window: list[TranscriptSegment]) -> list[FailureEvent]:
     - MOCK_MODE=1: Returns canned fixtures (legacy behavior)
     - EXTRACT_PROVIDER=mock: Fast deterministic extraction, no API keys needed
     - EXTRACT_PROVIDER=openai (default): Uses OpenAI GPT-4o-mini
+    - EXTRACT_PROVIDER=gemini: Uses Google Gemini API
     - EXTRACT_PROVIDER=ollama: Uses local Ollama (stub, not implemented)
 
     Returns [] if extraction fails.
@@ -223,8 +275,11 @@ def extract_failures(window: list[TranscriptSegment]) -> list[FailureEvent]:
     elif provider == "openai":
         logger.info("Using OpenAI extraction")
         return _extract_openai(window)
+    elif provider == "gemini":
+        logger.info("Using Gemini extraction")
+        return _extract_with_gemini(window)
     elif provider == "ollama":
         logger.info("Using Ollama extraction")
         return _extract_ollama(window)
     else:
-        raise ValueError(f"Unknown EXTRACT_PROVIDER: {provider}. Must be 'mock', 'openai', or 'ollama'.")
+        raise ValueError(f"Unknown EXTRACT_PROVIDER: {provider}. Must be 'mock', 'openai', 'gemini', or 'ollama'.")
