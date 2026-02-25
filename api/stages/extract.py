@@ -2,10 +2,11 @@
 
 import json
 import os
-
-from openai import OpenAI
+from pathlib import Path
 
 from models import FailureEvent, TranscriptSegment
+
+FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
 
 SYSTEM_PROMPT = """\
 You are a QA analysis assistant. You are given a window of timestamped transcript \
@@ -35,6 +36,25 @@ Your previous response was not valid JSON. Please output ONLY a valid JSON array
 of failure event objects (or [] if none). No markdown fences, no explanation, \
 just the raw JSON array.
 """
+
+
+def _is_mock_mode() -> bool:
+    return os.environ.get("MOCK_MODE", "").strip() in ("1", "true", "yes")
+
+
+def _mock_extract(window: list[TranscriptSegment]) -> list[FailureEvent]:
+    """Return failures from fixtures that overlap the given window's time range."""
+    fixture_path = FIXTURES_DIR / "failures.json"
+    with open(fixture_path) as f:
+        all_failures = [FailureEvent(**item) for item in json.load(f)]
+
+    window_start = min(seg.start for seg in window)
+    window_end = max(seg.end for seg in window)
+
+    return [
+        f for f in all_failures
+        if window_start <= f.timestamp_seconds <= window_end
+    ]
 
 
 def _format_window(window: list[TranscriptSegment]) -> str:
@@ -68,9 +88,15 @@ def _parse_failures(text: str) -> list[FailureEvent]:
 def extract_failures(window: list[TranscriptSegment]) -> list[FailureEvent]:
     """Extract failure events from a transcript window using GPT-4o-mini.
 
+    If MOCK_MODE=1, returns deterministic fixtures instead of calling the LLM.
     Includes one retry with a repair prompt on JSON parse failure.
     Returns [] if both attempts fail.
     """
+    if _is_mock_mode():
+        return _mock_extract(window)
+
+    from openai import OpenAI
+
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     user_content = _format_window(window)
 

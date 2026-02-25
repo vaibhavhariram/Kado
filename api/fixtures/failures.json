@@ -1,0 +1,34 @@
+[
+    {
+        "timestamp_seconds": 18.0,
+        "title": "Continue button unresponsive on checkout",
+        "expected": "Clicking the continue button should advance to the next step",
+        "actual": "Nothing happens when clicking continue; button appears unresponsive",
+        "evidence": "Now I click the continue button and... nothing happens. Let me try clicking it again. Still nothing. The button doesn't do anything.",
+        "confidence": 0.92
+    },
+    {
+        "timestamp_seconds": 28.0,
+        "title": "False zip code validation error",
+        "expected": "A valid zip code should be accepted by the form",
+        "actual": "Form displays 'invalid zip code' error for a valid zip code",
+        "evidence": "I see a small error message at the bottom. It says invalid zip code. But I definitely typed a valid zip code. That's a bug for sure.",
+        "confidence": 0.88
+    },
+    {
+        "timestamp_seconds": 58.5,
+        "title": "Order submission hangs indefinitely",
+        "expected": "Place Order should complete within a few seconds",
+        "actual": "Spinner runs for 30+ seconds and page appears frozen",
+        "evidence": "I click Place Order and I get a spinner. It's been spinning for about ten seconds. Okay it's still stuck. The spinner has been going for thirty seconds now.",
+        "confidence": 0.85
+    },
+    {
+        "timestamp_seconds": 77.0,
+        "title": "Missing order number on confirmation",
+        "expected": "Confirmation page should display the order number",
+        "actual": "Confirmation page loads but the order number is missing",
+        "evidence": "But the confirmation page is missing the order number. That seems wrong.",
+        "confidence": 0.78
+    }
+]

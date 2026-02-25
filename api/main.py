@@ -25,9 +25,18 @@ ALLOWED_EXTENSIONS = {".mp4", ".mov", ".webm"}
 MAX_DURATION_SECONDS = 300  # 5 minutes
 
 
+def _is_mock_mode() -> bool:
+    return os.environ.get("MOCK_MODE", "").strip() in ("1", "true", "yes")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan — verify ffmpeg is available on startup."""
+    if _is_mock_mode():
+        logger.info("MOCK_MODE is ON — API keys not required")
+    else:
+        if not os.environ.get("OPENAI_API_KEY"):
+            logger.warning("OPENAI_API_KEY is not set — /analyze will fail unless MOCK_MODE=1")
     try:
         subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
         logger.info("ffmpeg is available")
@@ -91,6 +100,14 @@ async def analyze(file: UploadFile = File(...)):
             detail=f"Unsupported format '{ext}'. Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
         )
 
+    # Gate: require OPENAI_API_KEY unless in mock mode
+    mock = _is_mock_mode()
+    if not mock and not os.environ.get("OPENAI_API_KEY"):
+        raise HTTPException(
+            status_code=501,
+            detail="OPENAI_API_KEY is not configured. Set the env var or enable MOCK_MODE=1.",
+        )
+
     # Save to temp file
     tmp_path: str | None = None
     try:
@@ -99,19 +116,21 @@ async def analyze(file: UploadFile = File(...)):
             content = await file.read()
             tmp.write(content)
 
-        # Validate duration
-        try:
-            duration = _get_video_duration(tmp_path)
-            if duration > MAX_DURATION_SECONDS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Video is {duration:.0f}s — max allowed is {MAX_DURATION_SECONDS}s (5 min)",
-                )
-        except RuntimeError as e:
-            raise HTTPException(status_code=400, detail=f"Cannot read video metadata: {e}")
+        # Validate duration (skip in mock mode — any file works)
+        duration = 0.0
+        if not mock:
+            try:
+                duration = _get_video_duration(tmp_path)
+                if duration > MAX_DURATION_SECONDS:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Video is {duration:.0f}s — max allowed is {MAX_DURATION_SECONDS}s (5 min)",
+                    )
+            except RuntimeError as e:
+                raise HTTPException(status_code=400, detail=f"Cannot read video metadata: {e}")
 
         # Run the pipeline
-        logger.info("Starting pipeline for %s (%.1fs)", file.filename, duration)
+        logger.info("Starting pipeline for %s (%.1fs, mock=%s)", file.filename, duration, mock)
         failures = run_pipeline(tmp_path)
 
         return AnalyzeResponse(failures=failures)

@@ -1,0 +1,92 @@
+[
+    {
+        "start": 0.0,
+        "end": 4.2,
+        "text": "Alright, let me walk through the checkout flow real quick."
+    },
+    {
+        "start": 4.2,
+        "end": 8.5,
+        "text": "So I added a couple items to the cart and I'm going to click checkout."
+    },
+    {
+        "start": 8.5,
+        "end": 13.1,
+        "text": "Okay, the checkout page loaded. I'll fill in my shipping address."
+    },
+    {
+        "start": 13.1,
+        "end": 18.0,
+        "text": "I type in my name, street, city, and zip code."
+    },
+    {
+        "start": 18.0,
+        "end": 23.5,
+        "text": "Now I click the continue button and... nothing happens."
+    },
+    {
+        "start": 23.5,
+        "end": 28.0,
+        "text": "Let me try clicking it again. Still nothing. The button doesn't do anything."
+    },
+    {
+        "start": 28.0,
+        "end": 33.2,
+        "text": "Wait, I see a small error message at the bottom. It says invalid zip code."
+    },
+    {
+        "start": 33.2,
+        "end": 38.0,
+        "text": "But I definitely typed a valid zip code. That's a bug for sure."
+    },
+    {
+        "start": 38.0,
+        "end": 43.5,
+        "text": "Okay, let me try a different zip code. I'll use nine zero two one zero."
+    },
+    {
+        "start": 43.5,
+        "end": 48.0,
+        "text": "Alright, that one worked. The payment page loaded."
+    },
+    {
+        "start": 48.0,
+        "end": 53.0,
+        "text": "I'll enter my card details. Card number, expiry, CVV."
+    },
+    {
+        "start": 53.0,
+        "end": 58.5,
+        "text": "I click Place Order and I get a spinner. It's been spinning for about ten seconds."
+    },
+    {
+        "start": 58.5,
+        "end": 63.0,
+        "text": "Okay it's still stuck. The spinner has been going for thirty seconds now."
+    },
+    {
+        "start": 63.0,
+        "end": 68.0,
+        "text": "I think the order is broken. The page is just frozen with the spinner."
+    },
+    {
+        "start": 68.0,
+        "end": 72.5,
+        "text": "I'm going to refresh the page and see what happens."
+    },
+    {
+        "start": 72.5,
+        "end": 77.0,
+        "text": "After refreshing, it looks like the order actually went through. I can see a confirmation."
+    },
+    {
+        "start": 77.0,
+        "end": 82.0,
+        "text": "But the confirmation page is missing the order number. That seems wrong."
+    },
+    {
+        "start": 82.0,
+        "end": 86.0,
+        "text": "Overall the checkout has a few issues that need to be fixed."
+    }
+]

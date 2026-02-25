@@ -18,6 +18,10 @@ from stages.dedupe import merge_and_dedupe
 logger = logging.getLogger(__name__)
 
 
+def _is_mock_mode() -> bool:
+    return os.environ.get("MOCK_MODE", "").strip() in ("1", "true", "yes")
+
+
 def run_pipeline(video_path: str) -> list[FailureEvent]:
     """Run the full Kado analysis pipeline on a video file.
 
@@ -27,17 +31,21 @@ def run_pipeline(video_path: str) -> list[FailureEvent]:
     Returns:
         Sorted list of deduplicated FailureEvent objects.
     """
+    mock = _is_mock_mode()
     wav_path: str | None = None
 
     try:
-        # Stage 1: Extract audio
-        logger.info("Stage 1: Extracting audio from %s", video_path)
-        wav_path = extract_audio(video_path)
-        logger.info("Audio extracted to %s", wav_path)
+        # Stage 1: Extract audio (skip in mock mode — transcribe uses fixtures)
+        if mock:
+            logger.info("Stage 1: MOCK — skipping audio extraction")
+        else:
+            logger.info("Stage 1: Extracting audio from %s", video_path)
+            wav_path = extract_audio(video_path)
+            logger.info("Audio extracted to %s", wav_path)
 
         # Stage 2: Transcribe
-        logger.info("Stage 2: Transcribing audio")
-        segments: list[TranscriptSegment] = transcribe(wav_path)
+        logger.info("Stage 2: Transcribing audio%s", " (MOCK)" if mock else "")
+        segments: list[TranscriptSegment] = transcribe(wav_path or "")
         logger.info("Got %d transcript segments", len(segments))
 
         if not segments:
