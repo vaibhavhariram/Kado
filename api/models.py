@@ -1,5 +1,7 @@
 """Kado v0 — Pydantic data models."""
 
+from typing import Literal, Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -22,7 +24,17 @@ class FailureEvent(BaseModel):
     confidence: float = Field(ge=0, le=1, description="Confidence score 0..1")
 
 
+class DebugInfo(BaseModel):
+    """Debug metadata about the analysis pipeline (only included when DEBUG=1)."""
+
+    num_segments: int = Field(description="Number of transcript segments")
+    num_candidates: int = Field(description="Number of candidate segments detected")
+    num_windows: int = Field(description="Number of context windows analyzed")
+
+
 class AnalyzeResponse(BaseModel):
     """Response from POST /analyze."""
 
     failures: list[FailureEvent]
+    mode: Literal["mock", "real"] = Field(description="Whether this result came from mock or real processing")
+    debug: Optional[DebugInfo] = Field(default=None, description="Debug metadata (only present when DEBUG=1)")

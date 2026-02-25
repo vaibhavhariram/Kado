@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
-from models import AnalyzeResponse
+from models import AnalyzeResponse, DebugInfo
 from pipeline import run_pipeline
 
 # Configure logging
@@ -27,6 +27,10 @@ MAX_DURATION_SECONDS = 300  # 5 minutes
 
 def _is_mock_mode() -> bool:
     return os.environ.get("MOCK_MODE", "").strip() in ("1", "true", "yes")
+
+
+def _is_debug_mode() -> bool:
+    return os.environ.get("DEBUG", "").strip() in ("1", "true", "yes")
 
 
 @asynccontextmanager
@@ -134,10 +138,19 @@ async def analyze(file: UploadFile = File(...)):
                 raise HTTPException(status_code=400, detail=f"Cannot read video metadata: {e}")
 
         # Run the pipeline
-        logger.info("Starting pipeline for %s (%.1fs, mock=%s)", file.filename, duration, mock)
-        failures = run_pipeline(tmp_path)
-
-        return AnalyzeResponse(failures=failures, mode="mock" if mock else "real")
+        debug_enabled = _is_debug_mode()
+        logger.info("Starting pipeline for %s (%.1fs, mock=%s, debug=%s)", file.filename, duration, mock, debug_enabled)
+        
+        if debug_enabled:
+            failures, debug_info = run_pipeline(tmp_path, debug=True)
+            return AnalyzeResponse(
+                failures=failures,
+                mode="mock" if mock else "real",
+                debug=DebugInfo(**debug_info)
+            )
+        else:
+            failures = run_pipeline(tmp_path, debug=False)
+            return AnalyzeResponse(failures=failures, mode="mock" if mock else "real")
 
     except HTTPException:
         raise
