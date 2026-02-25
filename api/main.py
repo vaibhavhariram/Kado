@@ -104,17 +104,26 @@ async def analyze(file: UploadFile = File(...)):
             detail=f"Unsupported format '{ext}'. Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
         )
 
-    # Gate: require OPENAI_API_KEY only if using OpenAI for transcription or extraction
+    # Gate: require API keys based on provider selection
     mock = _is_mock_mode()
     transcribe_provider = os.environ.get("TRANSCRIBE_PROVIDER", "openai").strip().lower()
     extract_provider = os.environ.get("EXTRACT_PROVIDER", "openai").strip().lower()
-    needs_openai = (transcribe_provider == "openai" or extract_provider == "openai")
     
-    if not mock and needs_openai and not os.environ.get("OPENAI_API_KEY"):
-        raise HTTPException(
-            status_code=501,
-            detail="OPENAI_API_KEY is not configured. Set the env var or enable MOCK_MODE=1.",
-        )
+    if not mock:
+        # Check OpenAI API key
+        needs_openai = (transcribe_provider == "openai" or extract_provider == "openai")
+        if needs_openai and not os.environ.get("OPENAI_API_KEY"):
+            raise HTTPException(
+                status_code=501,
+                detail="OPENAI_API_KEY is not configured. Set the env var or enable MOCK_MODE=1.",
+            )
+        
+        # Check Gemini API key
+        if extract_provider == "gemini" and not os.environ.get("GEMINI_API_KEY"):
+            raise HTTPException(
+                status_code=501,
+                detail="GEMINI_API_KEY is not configured. Set the env var when using EXTRACT_PROVIDER=gemini.",
+            )
 
     # Save to temp file
     tmp_path: str | None = None
