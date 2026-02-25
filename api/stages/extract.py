@@ -1,10 +1,13 @@
 """Stage 4 — LLM extraction of failure events from transcript windows."""
 
 import json
+import logging
 import os
 from pathlib import Path
 
 from models import FailureEvent, TranscriptSegment
+
+logger = logging.getLogger(__name__)
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
 
@@ -42,7 +45,12 @@ def _is_mock_mode() -> bool:
     return os.environ.get("MOCK_MODE", "").strip() in ("1", "true", "yes")
 
 
-def _mock_extract(window: list[TranscriptSegment]) -> list[FailureEvent]:
+def _get_extract_provider() -> str:
+    """Get extraction provider from env, defaults to 'openai'."""
+    return os.environ.get("EXTRACT_PROVIDER", "openai").strip().lower()
+
+
+def _mock_extract_fixtures(window: list[TranscriptSegment]) -> list[FailureEvent]:
     """Return failures from fixtures that overlap the given window's time range."""
     fixture_path = FIXTURES_DIR / "failures.json"
     with open(fixture_path) as f:
@@ -54,6 +62,58 @@ def _mock_extract(window: list[TranscriptSegment]) -> list[FailureEvent]:
     return [
         f for f in all_failures
         if window_start <= f.timestamp_seconds <= window_end
+    ]
+
+
+def _mock_extract_deterministic(window: list[TranscriptSegment]) -> list[FailureEvent]:
+    """Generate deterministic FailureEvents from window text without API calls.
+    
+    Fast and requires no keys. Uses simple rules to create failure events:
+    - timestamp: middle segment start time
+    - title/expected/actual: derived from transcript text
+    - confidence: fixed at 0.6
+    """
+    if not window:
+        return []
+    
+    # Use middle segment for timestamp
+    mid_idx = len(window) // 2
+    timestamp = window[mid_idx].start
+    
+    # Collect all text for context
+    full_text = " ".join(seg.text for seg in window)
+    
+    # Generate a simple failure based on text content
+    title = f"Issue detected at {timestamp:.1f}s"
+    
+    # Simple heuristics for expected/actual based on common patterns
+    if "doesn't" in full_text.lower() or "does not" in full_text.lower():
+        expected = "Feature should work as intended"
+        actual = "Feature is not working"
+    elif "error" in full_text.lower() or "bug" in full_text.lower():
+        expected = "No errors should occur"
+        actual = "Error or bug encountered"
+    elif "broken" in full_text.lower() or "crash" in full_text.lower():
+        expected = "Application should remain stable"
+        actual = "Application is broken or crashed"
+    else:
+        expected = "Expected behavior"
+        actual = "Unexpected behavior observed"
+    
+    # Use first 100 chars of window text as evidence
+    evidence = full_text[:100].strip()
+    if len(full_text) > 100:
+        evidence += "..."
+    
+    return [
+        FailureEvent(
+            timestamp_seconds=timestamp,
+            title=title,
+            expected=expected,
+            actual=actual,
+            evidence=evidence,
+            confidence=0.6,
+        )
     ]
 
 
@@ -85,16 +145,8 @@ def _parse_failures(text: str) -> list[FailureEvent]:
     return [FailureEvent(**item) for item in data]
 
 
-def extract_failures(window: list[TranscriptSegment]) -> list[FailureEvent]:
-    """Extract failure events from a transcript window using GPT-4o-mini.
-
-    If MOCK_MODE=1, returns deterministic fixtures instead of calling the LLM.
-    Includes one retry with a repair prompt on JSON parse failure.
-    Returns [] if both attempts fail.
-    """
-    if _is_mock_mode():
-        return _mock_extract(window)
-
+def _extract_openai(window: list[TranscriptSegment]) -> list[FailureEvent]:
+    """Extract failures using OpenAI GPT-4o-mini."""
     from openai import OpenAI
 
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
@@ -136,3 +188,43 @@ def extract_failures(window: list[TranscriptSegment]) -> list[FailureEvent]:
     except (json.JSONDecodeError, ValueError, KeyError):
         # Both attempts failed — skip this window
         return []
+
+
+def _extract_ollama(window: list[TranscriptSegment]) -> list[FailureEvent]:
+    """Extract failures using local Ollama LLM (stub implementation).
+    
+    TODO: Implement when Ollama support is needed.
+    For now, returns empty list.
+    """
+    logger.warning("Ollama extraction provider is not yet implemented")
+    return []
+
+
+def extract_failures(window: list[TranscriptSegment]) -> list[FailureEvent]:
+    """Extract failure events from a transcript window.
+
+    Respects MOCK_MODE and EXTRACT_PROVIDER environment variables.
+    - MOCK_MODE=1: Returns canned fixtures (legacy behavior)
+    - EXTRACT_PROVIDER=mock: Fast deterministic extraction, no API keys needed
+    - EXTRACT_PROVIDER=openai (default): Uses OpenAI GPT-4o-mini
+    - EXTRACT_PROVIDER=ollama: Uses local Ollama (stub, not implemented)
+
+    Returns [] if extraction fails.
+    """
+    # Legacy MOCK_MODE support (uses fixtures)
+    if _is_mock_mode():
+        return _mock_extract_fixtures(window)
+
+    provider = _get_extract_provider()
+    
+    if provider == "mock":
+        logger.info("Using mock (deterministic) extraction")
+        return _mock_extract_deterministic(window)
+    elif provider == "openai":
+        logger.info("Using OpenAI extraction")
+        return _extract_openai(window)
+    elif provider == "ollama":
+        logger.info("Using Ollama extraction")
+        return _extract_ollama(window)
+    else:
+        raise ValueError(f"Unknown EXTRACT_PROVIDER: {provider}. Must be 'mock', 'openai', or 'ollama'.")

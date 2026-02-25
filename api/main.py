@@ -65,7 +65,7 @@ app.add_middleware(
 @app.get("/health")
 def health():
     """Health check endpoint."""
-    return {"status": "ok"}
+    return {"ok": True, "mock_mode": _is_mock_mode()}
 
 
 def _get_video_duration(path: str) -> float:
@@ -100,9 +100,13 @@ async def analyze(file: UploadFile = File(...)):
             detail=f"Unsupported format '{ext}'. Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
         )
 
-    # Gate: require OPENAI_API_KEY unless in mock mode
+    # Gate: require OPENAI_API_KEY only if using OpenAI for transcription or extraction
     mock = _is_mock_mode()
-    if not mock and not os.environ.get("OPENAI_API_KEY"):
+    transcribe_provider = os.environ.get("TRANSCRIBE_PROVIDER", "openai").strip().lower()
+    extract_provider = os.environ.get("EXTRACT_PROVIDER", "openai").strip().lower()
+    needs_openai = (transcribe_provider == "openai" or extract_provider == "openai")
+    
+    if not mock and needs_openai and not os.environ.get("OPENAI_API_KEY"):
         raise HTTPException(
             status_code=501,
             detail="OPENAI_API_KEY is not configured. Set the env var or enable MOCK_MODE=1.",
@@ -133,7 +137,7 @@ async def analyze(file: UploadFile = File(...)):
         logger.info("Starting pipeline for %s (%.1fs, mock=%s)", file.filename, duration, mock)
         failures = run_pipeline(tmp_path)
 
-        return AnalyzeResponse(failures=failures)
+        return AnalyzeResponse(failures=failures, mode="mock" if mock else "real")
 
     except HTTPException:
         raise
