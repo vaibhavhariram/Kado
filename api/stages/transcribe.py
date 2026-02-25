@@ -1,8 +1,10 @@
-"""Stage 2 — Transcribe audio via OpenAI Whisper API, local faster-whisper, or mock fixtures."""
+"""Stage 2 — Transcribe audio via OpenAI Whisper API, local faster-whisper, whisper.cpp, or mock fixtures."""
 
 import json
 import logging
 import os
+import re
+import subprocess
 from pathlib import Path
 
 from models import TranscriptSegment
@@ -10,6 +12,12 @@ from models import TranscriptSegment
 logger = logging.getLogger(__name__)
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
+
+# Regex for whisper.cpp segment lines: [00:12.34 --> 00:15.67] some text
+_WHISPERCPP_SEGMENT_RE = re.compile(
+    r"\[\s*(\d+):(\d{2}\.\d+)\s*-->\s*(\d+):(\d{2}\.\d+)\s*\]\s*(.*)",
+    re.DOTALL,
+)
 
 
 def _is_mock_mode() -> bool:
@@ -55,6 +63,53 @@ def _transcribe_local(wav_path: str) -> list[TranscriptSegment]:
     return segments
 
 
+def _transcribe_whispercpp(wav_path: str) -> list[TranscriptSegment]:
+    """Transcribe using whisper-cpp CLI (no PyAV/faster-whisper deps)."""
+    cli_path = os.environ.get("WHISPERCPP_PATH", "whisper-cpp").strip()
+    model_path = os.environ.get("WHISPERCPP_MODEL_PATH", "").strip()
+    lang = os.environ.get("WHISPERCPP_LANG", "en").strip()
+
+    if not model_path:
+        raise ValueError("WHISPERCPP_MODEL_PATH is required when using TRANSCRIBE_PROVIDER=whispercpp")
+
+    if not Path(model_path).exists():
+        raise FileNotFoundError(f"WHISPERCPP_MODEL_PATH does not exist: {model_path}")
+
+    logger.info("Transcribing with whisper-cpp: %s -m %s -l %s", cli_path, model_path, lang)
+
+    cmd = [
+        cli_path,
+        "-m", model_path,
+        "-f", wav_path,
+        "-l", lang,
+    ]
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        cwd=None,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(f"whisper-cpp failed: {result.stderr[:500] if result.stderr else result.stdout[:500]}")
+
+    segments: list[TranscriptSegment] = []
+    for line in (result.stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = _WHISPERCPP_SEGMENT_RE.match(line)
+        if m:
+            start_min, start_sec, end_min, end_sec, text = m.groups()
+            start = int(start_min) * 60 + float(start_sec)
+            end = int(end_min) * 60 + float(end_sec)
+            segments.append(TranscriptSegment(start=start, end=end, text=text.strip()))
+
+    return segments
+
+
 def _transcribe_openai(wav_path: str) -> list[TranscriptSegment]:
     """Transcribe using OpenAI Whisper API."""
     from openai import OpenAI
@@ -89,6 +144,7 @@ def transcribe(wav_path: str) -> list[TranscriptSegment]:
     - MOCK_MODE=1: Returns canned fixtures
     - TRANSCRIBE_PROVIDER=openai (default): Uses OpenAI Whisper API
     - TRANSCRIBE_PROVIDER=local: Uses faster-whisper locally
+    - TRANSCRIBE_PROVIDER=whispercpp: Uses whisper-cpp CLI (no PyAV/faster-whisper)
 
     Args:
         wav_path: Path to a mono 16 kHz WAV file.
@@ -104,8 +160,11 @@ def transcribe(wav_path: str) -> list[TranscriptSegment]:
     if provider == "local":
         logger.info("Using local faster-whisper transcription")
         return _transcribe_local(wav_path)
+    elif provider == "whispercpp":
+        logger.info("Using whisper-cpp transcription")
+        return _transcribe_whispercpp(wav_path)
     elif provider == "openai":
         logger.info("Using OpenAI Whisper API transcription")
         return _transcribe_openai(wav_path)
     else:
-        raise ValueError(f"Unknown TRANSCRIBE_PROVIDER: {provider}. Must be 'openai' or 'local'.")
+        raise ValueError(f"Unknown TRANSCRIBE_PROVIDER: {provider}. Must be 'openai', 'local', or 'whispercpp'.")

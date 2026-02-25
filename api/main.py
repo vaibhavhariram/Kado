@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Tuple, Union
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,27 +26,87 @@ ALLOWED_EXTENSIONS = {".mp4", ".mov", ".webm"}
 MAX_DURATION_SECONDS = 300  # 5 minutes
 
 
+def _is_truthy_env(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _is_mock_mode() -> bool:
-    return os.environ.get("MOCK_MODE", "").strip() in ("1", "true", "yes")
+    return _is_truthy_env("MOCK_MODE")
 
 
 def _is_debug_mode() -> bool:
-    return os.environ.get("DEBUG", "").strip() in ("1", "true", "yes")
+    return _is_truthy_env("DEBUG")
+
+
+def _get_transcribe_provider() -> str:
+    return os.environ.get("TRANSCRIBE_PROVIDER", "openai").strip().lower()
+
+
+def _get_extract_provider() -> str:
+    return os.environ.get("EXTRACT_PROVIDER", "openai").strip().lower()
+
+
+def _require_provider_keys(mock: bool) -> None:
+    """Require API keys only for the selected providers (unless mock mode)."""
+    if mock:
+        return
+
+    transcribe_provider = _get_transcribe_provider()
+    extract_provider = _get_extract_provider()
+
+    # OpenAI key needed only if either stage uses OpenAI
+    if transcribe_provider == "openai" and not os.getenv("OPENAI_API_KEY"):
+        raise HTTPException(
+            status_code=501,
+            detail="OPENAI_API_KEY is not configured. Set the env var or switch TRANSCRIBE_PROVIDER.",
+        )
+
+    if extract_provider == "openai" and not os.getenv("OPENAI_API_KEY"):
+        raise HTTPException(
+            status_code=501,
+            detail="OPENAI_API_KEY is not configured. Set the env var or switch EXTRACT_PROVIDER.",
+        )
+
+    # Gemini key needed only if extraction uses Gemini
+    if extract_provider == "gemini" and not os.getenv("GEMINI_API_KEY"):
+        raise HTTPException(
+            status_code=501,
+            detail="GEMINI_API_KEY is not configured. Set the env var when using EXTRACT_PROVIDER=gemini.",
+        )
+
+    # whisper-cpp model path required when transcription uses whispercpp
+    if transcribe_provider == "whispercpp" and not os.getenv("WHISPERCPP_MODEL_PATH", "").strip():
+        raise HTTPException(
+            status_code=501,
+            detail="WHISPERCPP_MODEL_PATH is required when using TRANSCRIBE_PROVIDER=whispercpp.",
+        )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan — verify ffmpeg is available on startup."""
-    if _is_mock_mode():
-        logger.info("MOCK_MODE is ON — API keys not required")
+    mock = _is_mock_mode()
+    transcribe_provider = _get_transcribe_provider()
+    extract_provider = _get_extract_provider()
+
+    if mock:
+        logger.info("MOCK_MODE is ON — using fixtures; external API keys not required")
     else:
-        if not os.environ.get("OPENAI_API_KEY"):
-            logger.warning("OPENAI_API_KEY is not set — /analyze will fail unless MOCK_MODE=1")
+        # Don't hard-fail startup; just log what will be required.
+        needs_openai = transcribe_provider == "openai" or extract_provider == "openai"
+        needs_gemini = extract_provider == "gemini"
+
+        if needs_openai and not os.getenv("OPENAI_API_KEY"):
+            logger.warning("OPENAI_API_KEY is not set — /analyze will fail if OpenAI providers are selected")
+        if needs_gemini and not os.getenv("GEMINI_API_KEY"):
+            logger.warning("GEMINI_API_KEY is not set — /analyze will fail if EXTRACT_PROVIDER=gemini is selected")
+
     try:
         subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
         logger.info("ffmpeg is available")
     except (subprocess.CalledProcessError, FileNotFoundError):
-        logger.error("ffmpeg is NOT available — audio extraction will fail")
+        logger.error("ffmpeg is NOT available — audio extraction will fail in real mode")
+
     yield
 
 
@@ -68,17 +129,30 @@ app.add_middleware(
 
 @app.get("/health")
 def health():
-    """Health check endpoint."""
-    return {"ok": True, "mock_mode": _is_mock_mode()}
+    """Health check endpoint with effective runtime configuration."""
+    mock = _is_mock_mode()
+    return {
+        "ok": True,
+        "mode": "mock" if mock else "real",
+        "mock_mode": mock,
+        "debug": _is_debug_mode(),
+        "transcribe_provider": _get_transcribe_provider(),
+        "extract_provider": _get_extract_provider(),
+        "has_openai_key": bool(os.getenv("OPENAI_API_KEY")),
+        "has_gemini_key": bool(os.getenv("GEMINI_API_KEY")),
+    }
 
 
 def _get_video_duration(path: str) -> float:
     """Get video duration in seconds using ffprobe."""
     cmd = [
         "ffprobe",
-        "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
         path,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -89,41 +163,24 @@ def _get_video_duration(path: str) -> float:
 
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(file: UploadFile = File(...)):
-    """Upload a narrated video and get back detected failure events.
-
-    Accepts mp4, mov, or webm files up to 5 minutes long.
-    """
-    # Validate file extension
+    """Upload a narrated video and get back detected failure events."""
+    # Validate filename
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
 
+    # Validate extension
     ext = Path(file.filename).suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported format '{ext}'. Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
+            detail=f"Unsupported format '{ext}'. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
         )
 
-    # Gate: require API keys based on provider selection
     mock = _is_mock_mode()
-    transcribe_provider = os.environ.get("TRANSCRIBE_PROVIDER", "openai").strip().lower()
-    extract_provider = os.environ.get("EXTRACT_PROVIDER", "openai").strip().lower()
-    
-    if not mock:
-        # Check OpenAI API key
-        needs_openai = (transcribe_provider == "openai" or extract_provider == "openai")
-        if needs_openai and not os.environ.get("OPENAI_API_KEY"):
-            raise HTTPException(
-                status_code=501,
-                detail="OPENAI_API_KEY is not configured. Set the env var or enable MOCK_MODE=1.",
-            )
-        
-        # Check Gemini API key
-        if extract_provider == "gemini" and not os.environ.get("GEMINI_API_KEY"):
-            raise HTTPException(
-                status_code=501,
-                detail="GEMINI_API_KEY is not configured. Set the env var when using EXTRACT_PROVIDER=gemini.",
-            )
+    debug_enabled = _is_debug_mode()
+
+    # Require only the relevant keys for the chosen providers
+    _require_provider_keys(mock=mock)
 
     # Save to temp file
     tmp_path: str | None = None
@@ -146,20 +203,31 @@ async def analyze(file: UploadFile = File(...)):
             except RuntimeError as e:
                 raise HTTPException(status_code=400, detail=f"Cannot read video metadata: {e}")
 
-        # Run the pipeline
-        debug_enabled = _is_debug_mode()
-        logger.info("Starting pipeline for %s (%.1fs, mock=%s, debug=%s)", file.filename, duration, mock, debug_enabled)
-        
+        logger.info(
+            "Starting pipeline for %s (%.1fs, mode=%s, debug=%s, transcribe=%s, extract=%s)",
+            file.filename,
+            duration,
+            "mock" if mock else "real",
+            debug_enabled,
+            _get_transcribe_provider(),
+            _get_extract_provider(),
+        )
+
+        # Run pipeline
         if debug_enabled:
             failures, debug_info = run_pipeline(tmp_path, debug=True)
             return AnalyzeResponse(
                 failures=failures,
                 mode="mock" if mock else "real",
-                debug=DebugInfo(**debug_info)
+                debug=DebugInfo(**debug_info) if debug_info else None,
             )
-        else:
-            failures = run_pipeline(tmp_path, debug=False)
-            return AnalyzeResponse(failures=failures, mode="mock" if mock else "real")
+
+        failures = run_pipeline(tmp_path, debug=False)
+        return AnalyzeResponse(
+            failures=failures,
+            mode="mock" if mock else "real",
+            debug=None,
+        )
 
     except HTTPException:
         raise
@@ -167,7 +235,6 @@ async def analyze(file: UploadFile = File(...)):
         logger.exception("Pipeline error")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
     finally:
-        # Always clean up the uploaded temp file
         if tmp_path and Path(tmp_path).exists():
             try:
                 os.unlink(tmp_path)
